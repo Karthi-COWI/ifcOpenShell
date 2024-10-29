@@ -29,6 +29,7 @@ def add_slab_representation(
     context: ifcopenshell.entity_instance,
     # in meters
     depth: float = 0.2,
+    direction_sense: str = "POSITIVE",
     # in radians
     x_angle: float = 0.0,
     # A list of planes that define clipping half space solids
@@ -42,6 +43,7 @@ def add_slab_representation(
     usecase.settings = {
         "context": context,
         "depth": depth,
+        "direction_sense": direction_sense,
         "x_angle": x_angle,
         "clippings": clippings if clippings is not None else [],
         "polyline": polyline,
@@ -72,8 +74,16 @@ class Usecase:
             extrusion_direction = self.file.createIfcDirection(
                 (0.0, sin(self.settings["x_angle"]), cos(self.settings["x_angle"]))
             )
+            if self.settings["direction_sense"] == "NEGATIVE":
+                extrusion_direction = self.file.createIfcDirection(
+                    (0.0, -sin(self.settings["x_angle"]), -cos(self.settings["x_angle"]))
+                )
         else:
             extrusion_direction = self.file.createIfcDirection((0.0, 0.0, 1.0))
+            if self.settings["direction_sense"] == "NEGATIVE":
+                extrusion_direction = self.file.createIfcDirection((0.0, 0.0, -1.0))
+            
+
 
         position = None
         # default position for IFC2X3 where .Position is not optional
@@ -84,6 +94,7 @@ class Usecase:
                 self.file.createIfcDirection((1.0, 0.0, 0.0)),
             )
 
+        print(self.settings["depth"], self.settings["direction_sense"])
         extrusion = self.file.createIfcExtrudedAreaSolid(
             self.file.createIfcArbitraryClosedProfileDef("AREA", None, curve),
             position,
