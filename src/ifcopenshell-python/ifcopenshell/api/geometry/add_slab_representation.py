@@ -30,6 +30,7 @@ def add_slab_representation(
     # in meters
     depth: float = 0.2,
     direction_sense: str = "POSITIVE",
+    offset: float = 0.0,
     # in radians
     x_angle: float = 0.0,
     # A list of planes that define clipping half space solids
@@ -44,6 +45,7 @@ def add_slab_representation(
         "context": context,
         "depth": depth,
         "direction_sense": direction_sense,
+        "offset": offset,
         "x_angle": x_angle,
         "clippings": clippings if clippings is not None else [],
         "polyline": polyline,
@@ -89,10 +91,16 @@ class Usecase:
         # default position for IFC2X3 where .Position is not optional
         if self.file.schema == "IFC2X3":
             position = self.file.createIfcAxis2Placement3D(
-                self.file.createIfcCartesianPoint((0.0, 0.0, 0.0)),
+                self.file.createIfcCartesianPoint((0.0, 0.0, self.convert_si_to_unit(self.settings["offset"]))),
                 self.file.createIfcDirection((0.0, 0.0, 1.0)),
                 self.file.createIfcDirection((1.0, 0.0, 0.0)),
             )
+
+        position = self.file.createIfcAxis2Placement3D(
+            self.file.createIfcCartesianPoint((0.0, 0.0, self.convert_si_to_unit(self.settings["offset"]))),
+            self.file.createIfcDirection((0.0, 0.0, 1.0)),
+            self.file.createIfcDirection((1.0, 0.0, 0.0)),
+        )
 
         extrusion = self.file.createIfcExtrudedAreaSolid(
             self.file.createIfcArbitraryClosedProfileDef("AREA", None, curve),
