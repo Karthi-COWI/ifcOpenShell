@@ -65,7 +65,7 @@ class Usecase:
         size = self.convert_si_to_unit(1)
         points = ((0.0, 0.0), (size, 0.0), (size, size), (0.0, size), (0.0, 0.0))
         if self.settings["polyline"]:
-            points = [(self.convert_si_to_unit(p[0]), self.convert_si_to_unit(p[1])) for p in self.settings["polyline"]]
+            points = [(self.convert_si_to_unit(p[0]), self.convert_si_to_unit(p[1] * (1 / cos(self.settings["x_angle"])))) for p in self.settings["polyline"]]
         if self.file.schema == "IFC2X3":
             curve = self.file.createIfcPolyline([self.file.createIfcCartesianPoint(p) for p in points])
         else:
@@ -94,7 +94,6 @@ class Usecase:
                 self.file.createIfcDirection((1.0, 0.0, 0.0)),
             )
 
-        print(self.settings["depth"], self.settings["direction_sense"])
         extrusion = self.file.createIfcExtrudedAreaSolid(
             self.file.createIfcArbitraryClosedProfileDef("AREA", None, curve),
             position,
