@@ -30,6 +30,7 @@ import bonsai.core.type
 import bonsai.core.geometry
 import bonsai.core.root
 import bonsai.tool as tool
+from math import sin, cos, degrees, radians
 from mathutils import Vector, Matrix
 from bonsai.bim.module.geometry.helper import Helper
 from bonsai.bim.module.model.decorator import ProfileDecorator, PolylineDecorator, ProductDecorator
@@ -110,10 +111,10 @@ class DumbSlabGenerator:
         matrix_world = Matrix()
         matrix_world.translation = self.location
         if self.container_obj:
-            matrix_world.translation.z = self.container_obj.location.z - self.depth
+            matrix_world.translation.z = self.container_obj.location.z
         else:
-            matrix_world.translation.z -= self.depth
-        obj.matrix_world = Matrix.Rotation(self.x_angle, 4, "X") @ matrix_world
+            matrix_world.translation.z
+        obj.matrix_world = matrix_world @ Matrix.Rotation(self.x_angle, 4, "X")
         bpy.context.view_layer.update()
 
         element = bonsai.core.root.assign_class(
@@ -172,29 +173,58 @@ class DumbSlabGenerator:
 
 
 class DumbSlabPlaner:
+    def regenerate_from_layer_set_usage(self, usecase_path, ifc_file, settings):
+        self.unit_scale = ifcopenshell.util.unit.calculate_unit_scale(ifc_file)
+        obj = bpy.context.active_object
+        element = tool.Ifc.get_entity(obj)
+
+        # Called from materil.add_layer or material.remove_layer
+        material = ifcopenshell.util.element.get_material(element)
+        material_set_usage = tool.Ifc.get().by_id(material.id())
+        layer_set = material_set_usage.ForLayerSet
+
+        total_thickness = sum([l.LayerThickness for l in layer_set.MaterialLayers])
+        if not total_thickness:
+            return
+
+        self.change_thickness(element, total_thickness)
+
     def regenerate_from_layer(self, usecase_path, ifc_file, settings):
         self.unit_scale = ifcopenshell.util.unit.calculate_unit_scale(ifc_file)
-        layer = settings["layer"]
-        thickness = settings["attributes"].get("LayerThickness")
-        if thickness is None:
+        obj = bpy.context.active_object
+        element = tool.Ifc.get_entity(obj)
+
+        try:
+            # Called from materil.edit_layer
+            layer = settings["layer"]
+            thickness = settings["attributes"].get("LayerThickness")
+            if thickness is None:
+                return
+            layer_set = layer.ToMaterialLayerSet[0]
+
+        except:
+            # Called from materil.add_layer or material.remove_layer
+            material = ifcopenshell.util.element.get_material(element)
+            material_set_usage = tool.Ifc.get().by_id(material.id())
+            layer_set = material_set_usage.ForLayerSet
+
+        total_thickness = sum([l.LayerThickness for l in layer_set.MaterialLayers])
+        if not total_thickness:
             return
-        for layer_set in layer.ToMaterialLayerSet:
-            total_thickness = sum([l.LayerThickness for l in layer_set.MaterialLayers])
-            if not total_thickness:
+
+        for inverse in ifc_file.get_inverse(layer_set):
+            if not inverse.is_a("IfcMaterialLayerSetUsage") or inverse.LayerSetDirection != "AXIS3":
                 continue
-            for inverse in ifc_file.get_inverse(layer_set):
-                if not inverse.is_a("IfcMaterialLayerSetUsage") or inverse.LayerSetDirection != "AXIS3":
-                    continue
-                if ifc_file.schema == "IFC2X3":
-                    for rel in ifc_file.get_inverse(inverse):
-                        if not rel.is_a("IfcRelAssociatesMaterial"):
-                            continue
-                        for element in rel.RelatedObjects:
-                            self.change_thickness(element, total_thickness)
-                else:
-                    for rel in inverse.AssociatedTo:
-                        for element in rel.RelatedObjects:
-                            self.change_thickness(element, total_thickness)
+            if ifc_file.schema == "IFC2X3":
+                for rel in ifc_file.get_inverse(inverse):
+                    if not rel.is_a("IfcRelAssociatesMaterial"):
+                        continue
+                    for element in rel.RelatedObjects:
+                        self.change_thickness(element, total_thickness)
+            else:
+                for rel in inverse.AssociatedTo:
+                    for element in rel.RelatedObjects:
+                        self.change_thickness(element, total_thickness)
 
     def regenerate_from_type(self, usecase_path, ifc_file, settings):
         relating_type = settings["relating_type"]
@@ -229,12 +259,13 @@ class DumbSlabPlaner:
             self.change_thickness(related_object, new_thickness)
 
     def change_thickness(self, element: ifcopenshell.entity_instance, thickness: float) -> None:
+        layer_params = tool.Model.get_material_layer_parameters(element)
         body_context = ifcopenshell.util.representation.get_context(tool.Ifc.get(), "Model", "Body", "MODEL_VIEW")
         obj = tool.Ifc.get_object(element)
         if not obj:
             return
 
-        delta_thickness = (thickness * self.unit_scale) - obj.dimensions.z
+        delta_thickness = thickness * self.unit_scale
         if round(delta_thickness, 2) == 0:
             return
 
@@ -242,7 +273,29 @@ class DumbSlabPlaner:
         if representation:
             extrusion = tool.Model.get_extrusion(representation)
             if extrusion:
-                extrusion.Depth = thickness
+                x, y, z = extrusion.ExtrudedDirection.DirectionRatios
+                # The existing angle result can change when the direction sense in Negative because the DirectionRatios may have negative y and z.
+                # For instance, a 30 degree angled slab, with negative direction will show as -150 degrees. To prevent that we do the following transformations
+                existing_x_angle = Vector((0, 1)).angle_signed(Vector((y, z)))
+                existing_x_angle = (
+                    existing_x_angle + radians(180) if existing_x_angle < -radians(90) else existing_x_angle
+                )
+                existing_x_angle = (
+                    existing_x_angle - radians(180) if existing_x_angle > radians(90) else existing_x_angle
+                )
+                perpendicular_depth = thickness * (1 / cos(existing_x_angle))
+                if layer_params["direction_sense"] == "POSITIVE":
+                    y = abs(y) if existing_x_angle > 0 else -abs(y)
+                    z = abs(z)
+                elif layer_params["direction_sense"] == "NEGATIVE":
+                    y = -abs(y) if existing_x_angle > 0 else abs(y)
+                    z = -abs(z)
+                extrusion.ExtrudedDirection.DirectionRatios = (x, y, z)
+                extrusion.Depth = perpendicular_depth
+
+                x, y, z = extrusion.Position.Location.Coordinates
+                z = layer_params["offset"] / self.unit_scale
+                extrusion.Position.Location.Coordinates = (x, y, z)
             else:
                 props = bpy.context.scene.BIMModelProperties
                 x_angle = 0 if tool.Cad.is_x(props.x_angle, 0, tolerance=0.001) else props.x_angle
@@ -291,8 +344,6 @@ class DumbSlabPlaner:
             is_global=True,
             should_sync_changes_first=False,
         )
-
-        obj.location[2] -= delta_thickness
 
 
 class EnableEditingSketchExtrusionProfile(bpy.types.Operator, tool.Ifc.Operator):
